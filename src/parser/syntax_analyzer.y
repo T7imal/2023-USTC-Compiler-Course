@@ -38,7 +38,7 @@ syntax_tree_node *node(const char *node_name, int children_num, ...);
 /* TODO: Your tokens here. */
 %token <node> ERROR
 %token <node> ELSE IF INT RETURN VOID WHILE FLOAT
-%token <node> ADD SUB MUL DIV LT LE GT GE EQ NE ASSIGN SEMICOLON COMMA LPAREN RPAREN LSQUARE RSQUARE LBRACE RBRACE LCOMMENT RCOMMENT
+%token <node> ADD SUB MUL DIV LT LE GT GE EQ NE ASSIGN SEMICOLON COMMA LPAREN RPAREN LSQUARE RSQUARE LBRACE RBRACE
 %token <node> ID INTEGER FLOATPOINT
 %type <node> program
 %type <node> type-specifier relop addop mulop
