@@ -112,5 +112,6 @@ private:
         Value* varLocation = nullptr;
         Value* cmpResult = nullptr;
         Value* argVar = nullptr;
+        bool requireLvalue = false;
     } context;
 };

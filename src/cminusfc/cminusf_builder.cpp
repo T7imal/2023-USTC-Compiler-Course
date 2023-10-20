@@ -201,11 +201,13 @@ Value* CminusfBuilder::visit(ASTSelectionStmt& node) {
     builder->create_cond_br(cond, trueBB, falseBB);
     builder->set_insert_point(trueBB);
     node.if_statement->accept(*this);
-    builder->create_br(endBB);
+    if (!builder->get_insert_block()->is_terminated())
+        builder->create_br(endBB);
     builder->set_insert_point(falseBB);
     if (node.else_statement != nullptr)
         node.else_statement->accept(*this);
-    builder->create_br(endBB);
+    if (!builder->get_insert_block()->is_terminated())
+        builder->create_br(endBB);
     builder->set_insert_point(endBB);
     return nullptr;
 }
@@ -223,7 +225,8 @@ Value* CminusfBuilder::visit(ASTIterationStmt& node) {
     builder->create_cond_br(cond, bodyBB, endBB);
     builder->set_insert_point(bodyBB);
     node.statement->accept(*this);
-    builder->create_br(condBB);
+    if (!builder->get_insert_block()->is_terminated())
+        builder->create_br(condBB);
     builder->set_insert_point(endBB);
     return nullptr;
 }
@@ -237,6 +240,11 @@ Value* CminusfBuilder::visit(ASTReturnStmt& node) {
         // TODO: The given code is incomplete.
         // You need to solve other return cases (e.g. return an integer).
         auto ret_val = node.expression->accept(*this);
+        if (ret_val->get_type() != context.func->get_return_type())
+            if (ret_val->get_type()->is_integer_type())
+                ret_val = builder->create_sitofp(ret_val, FLOAT_T);
+            else
+                ret_val = builder->create_fptosi(ret_val, INT32_T);
         builder->create_ret(ret_val);
         return ret_val;
     }
@@ -246,16 +254,22 @@ Value* CminusfBuilder::visit(ASTReturnStmt& node) {
 Value* CminusfBuilder::visit(ASTVar& node) {
     // TODO: This function is empty now.
     // Add some code here.
+    auto requireLvalue = context.requireLvalue;
+    context.requireLvalue = false;
     if (node.expression == nullptr) {
         auto var = scope.find(node.id);
-        if (var->get_type()->is_pointer_type()) {
+        if (requireLvalue) {
+            context.varLocation = var;
+            return var;
+        }
+        else {
             if (var->get_type()->get_pointer_element_type()->is_array_type())
                 var = builder->create_gep(var, { CONST_INT(0), CONST_INT(0) });
             else
-                var = builder->create_gep(var, { CONST_INT(0) });
+                var = builder->create_load(var);
         }
         context.varLocation = var;
-        return builder->create_load(var);
+        return var;
     }
     else {
         auto var = scope.find(node.id);
@@ -285,6 +299,9 @@ Value* CminusfBuilder::visit(ASTVar& node) {
         builder->create_br(endBB);
         builder->set_insert_point(endBB);
         context.varLocation = var;
+        if (requireLvalue) {
+            return var;
+        }
         return builder->create_load(var);
     }
 }
@@ -292,17 +309,17 @@ Value* CminusfBuilder::visit(ASTVar& node) {
 Value* CminusfBuilder::visit(ASTAssignExpression& node) {
     // TODO: This function is empty now.
     // Add some code here.
+    context.requireLvalue = true;
     auto var = node.var->accept(*this);
     auto varLocation = context.varLocation;
     auto val = node.expression->accept(*this);
-    if (var->get_type() != val->get_type()) {
-        if (var->get_type()->is_integer_type())
+    if (var->get_type()->get_pointer_element_type() != val->get_type()) {
+        if (var->get_type()->get_pointer_element_type()->is_integer_type())
             val = builder->create_fptosi(val, INT32_T);
         else
             val = builder->create_sitofp(val, FLOAT_T);
     }
     builder->create_store(val, varLocation);
-
     return val;
 }
 
