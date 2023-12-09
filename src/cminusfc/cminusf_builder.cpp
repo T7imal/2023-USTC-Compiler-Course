@@ -278,10 +278,12 @@ Value* CminusfBuilder::visit(ASTVar& node) {
             idx = builder->create_fptosi(idx, INT32_T);
         auto posBB = BasicBlock::create(module.get(), "", context.func);
         auto negBB = BasicBlock::create(module.get(), "", context.func);
-        auto endBB = BasicBlock::create(module.get(), "", context.func);
-        auto cond = builder->create_icmp_ge(idx, CONST_INT(0));
+        auto cond = builder->create_icmp_le(idx, CONST_INT(0));
         builder->create_cond_br(cond, posBB, negBB);
         builder->set_insert_point(posBB);
+        builder->create_call(scope.find("neg_idx_except"), {});
+        builder->create_br(negBB);
+        builder->set_insert_point(negBB);
         if (var->get_type()->get_pointer_element_type()->is_integer_type()
             || var->get_type()->get_pointer_element_type()->is_float_type()) {
             var = builder->create_gep(var, { idx });
@@ -293,11 +295,6 @@ Value* CminusfBuilder::visit(ASTVar& node) {
             var = builder->create_load(var);
             var = builder->create_gep(var, { idx });
         }
-        builder->create_br(endBB);
-        builder->set_insert_point(negBB);
-        builder->create_call(scope.find("neg_idx_except"), {});
-        builder->create_br(endBB);
-        builder->set_insert_point(endBB);
         context.varLocation = var;
         if (requireLvalue) {
             return var;
