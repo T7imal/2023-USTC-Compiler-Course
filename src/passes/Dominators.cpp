@@ -84,7 +84,7 @@ void Dominators::create_idom(Function* f) {
                 auto bb2 = &(*pred);
                 if (bb2 == new_idom)
                     continue;
-                if (idom_.at(bb2) != nullptr) {
+                if (idom_.at(bb2) != nullptr && idom_.at(new_idom) != nullptr) {
                     new_idom = intersect(bb2, new_idom);
                 }
             }
@@ -115,7 +115,7 @@ void Dominators::create_dominance_frontier(Function* f) {
 void Dominators::create_dom_tree_succ(Function* f) {
     for (auto& bb1 : f->get_basic_blocks()) {
         auto bb = &bb1;
-        if (idom_[bb] != nullptr) {
+        if (idom_[bb] != nullptr && idom_[bb] != bb) {
             dom_tree_succ_blocks_[idom_[bb]].insert(bb);
         }
     }

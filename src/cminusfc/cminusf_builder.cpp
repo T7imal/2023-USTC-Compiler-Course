@@ -278,7 +278,7 @@ Value* CminusfBuilder::visit(ASTVar& node) {
             idx = builder->create_fptosi(idx, INT32_T);
         auto posBB = BasicBlock::create(module.get(), "", context.func);
         auto negBB = BasicBlock::create(module.get(), "", context.func);
-        auto cond = builder->create_icmp_le(idx, CONST_INT(0));
+        auto cond = builder->create_icmp_lt(idx, CONST_INT(0));
         builder->create_cond_br(cond, posBB, negBB);
         builder->set_insert_point(posBB);
         builder->create_call(scope.find("neg_idx_except"), {});

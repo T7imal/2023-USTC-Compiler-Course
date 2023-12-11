@@ -554,6 +554,34 @@ void CodeGen::run() {
                     // For debug
                     append_inst(instr.print(), ASMInstruction::Comment);
                     context.inst = &instr; // 更新 context
+                    // 在基本块终结前，处理 phi 指令
+                    if (instr.isTerminator()) {
+                        // 检测后继基本块中是否包含 phi 指令
+                        for (auto& succ : bb.get_succ_basic_blocks()) {
+                            for (auto& inst : succ->get_instructions()) {
+                                if (inst.is_phi()) {
+                                    for (int i = 0; i < inst.get_num_operand(); i += 2) {
+                                        auto* val = inst.get_operand(i);
+                                        auto* prebb = static_cast<BasicBlock*>(inst.get_operand(i + 1));
+                                        if (prebb == &bb) {
+                                            append_inst(inst.print(), ASMInstruction::Comment);
+                                            // std::cout << val->get_type() << std::endl;
+                                            if (val->get_type()->is_float_type()) {
+                                                load_to_freg(val, FReg::ft(0));
+                                                store_from_freg(&inst, FReg::ft(0));
+                                            }
+                                            else {
+                                                load_to_greg(val, Reg::t(0));
+                                                store_from_greg(&inst, Reg::t(0));
+                                            }
+                                            // load_to_greg(val, Reg::t(0));
+                                            // store_from_greg(&inst, Reg::t(0));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     switch (instr.get_instr_type()) {
                     case Instruction::ret:
                         gen_ret();
@@ -599,8 +627,9 @@ void CodeGen::run() {
                         gen_fcmp();
                         break;
                     case Instruction::phi:
-                        throw unreachable_error{
-                            "There is no requirement for phi in lab3!" };
+                        // throw unreachable_error{
+                        //     "There is no requirement for phi in lab3!" };
+                        // 什么也不做
                         break;
                     case Instruction::call:
                         gen_call();

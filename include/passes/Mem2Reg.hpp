@@ -17,6 +17,7 @@ private:
   std::map<Value*, std::stack<Value*>> rename_stack_;
   std::map<PhiInst*, Value*> phi_values_;
   std::map<GetElementPtrInst*, std::vector<Value*>> gep_values_;
+  std::map<Value*, bool> is_dead_;
 
 public:
   Mem2Reg(Module* m) : Pass(m) {}

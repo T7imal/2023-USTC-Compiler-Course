@@ -17,17 +17,21 @@ void Mem2Reg::run() {
             continue;
         func_ = &f;
         if (func_->get_basic_blocks().size() >= 1) {
+            rename_stack_.clear();
+            phi_values_.clear();
+            gep_values_.clear();
+            is_dead_.clear();
             // 对应伪代码中 phi 指令插入的阶段
             generate_phi();
             // 为每个内存变量建立一个栈，用于存放变量的最新定值
-            for (auto& bb : func_->get_basic_blocks()) {
-                for (auto& inst : bb.get_instructions()) {
-                    if (inst.is_alloca() || inst.is_load() || inst.is_store()) {
-                        auto lval = static_cast<Value*>(&inst);
-                        rename_stack_[lval] = std::stack<Value*>();
-                    }
-                }
-            }
+            // for (auto& bb : func_->get_basic_blocks()) {
+            //     for (auto& inst : bb.get_instructions()) {
+            //         if (inst.is_alloca() || inst.is_load() || inst.is_store()) {
+            //             auto lval = static_cast<Value*>(&inst);
+            //             rename_stack_[lval] = std::stack<Value*>();
+            //         }
+            //     }
+            // }
             // 对应伪代码中重命名阶段
             rename(func_->get_entry_block());
         }
@@ -64,6 +68,7 @@ void Mem2Reg::generate_phi() {
                         gep_values_[gep].push_back(gep->get_operand(i));
                     }
                 }
+                bool exist = false;
                 for (auto it = gep_values_.begin(); it != gep_values_.end(); it++) {
                     if (it->first != gep) {
                         if (it->second.size() == op_num) {
@@ -74,15 +79,20 @@ void Mem2Reg::generate_phi() {
                                     break;
                                 }
                             }
-                            if (!flag) {
-                                for (int i = 0; i < op_num; i++) {
-                                    gep_values_[gep].push_back(gep->get_operand(i));
-                                }
+                            if (flag) {
+                                exist = true;
+                                break;
                             }
                         }
                     }
                     else {
+                        exist = true;
                         continue;
+                    }
+                }
+                if (!exist) {
+                    for (int i = 0; i < op_num; i++) {
+                        gep_values_[gep].push_back(gep->get_operand(i));
                     }
                 }
             }
@@ -100,12 +110,23 @@ void Mem2Reg::generate_phi() {
                 W.erase(bb);
                 for (auto df : dominators_->get_dominance_frontier(bb)) {
                     if (F.find(df) == F.end()) {
-                        auto phi = PhiInst::create_phi(val->get_type(), df, {  }, {  });
-                        phi_values_[phi] = val; // 记录 phi 指令对应的变量
-                        df->add_instr_begin(phi);
-                        F.insert(df);
-                        if (W.find(df) == W.end()) {
-                            W.insert(df);
+                        if (val->get_type()->is_pointer_type()) {
+                            auto phi = PhiInst::create_phi(val->get_type()->get_pointer_element_type(), df, {  }, {  });
+                            phi_values_[phi] = val; // 记录 phi 指令对应的变量
+                            df->add_instr_begin(phi);
+                            F.insert(df);
+                            if (W.find(df) == W.end()) {
+                                W.insert(df);
+                            }
+                        }
+                        else {
+                            auto phi = PhiInst::create_phi(val->get_type(), df, {  }, {  });
+                            phi_values_[phi] = val; // 记录 phi 指令对应的变量
+                            df->add_instr_begin(phi);
+                            F.insert(df);
+                            if (W.find(df) == W.end()) {
+                                W.insert(df);
+                            }
                         }
                     }
                 }
@@ -136,8 +157,15 @@ void Mem2Reg::rename(BasicBlock* bb) {
             if (rename_stack_[rval].empty())
                 continue;
             auto replace_val = rename_stack_[rval].top();
+            if (is_valid_ptr(rval)) {
+                is_dead_[rval] = true;  // 定义被使用，标记为冗余
+            }
+            else {
+                is_dead_[rval] = false; // 可能是内存操作，标记为非冗余
+            }
             auto inst_after = std::next(load->getIterator());
             // 替换 load 指令后面的所有指令中的操作数
+            // 本基本块
             while (inst_after != bb->get_instructions().end()) {
                 auto inst = &(*inst_after);
                 for (int i = 0; i < inst->get_num_operand(); i++) {
@@ -148,12 +176,33 @@ void Mem2Reg::rename(BasicBlock* bb) {
                 }
                 inst_after++;
             }
+            // 后续基本块
+            BBSet succs = dominators_->get_dom_tree_succ_blocks(bb);
+            while (!succs.empty()) {
+                auto succ = *succs.begin();
+                succs.erase(succ);
+                succs.insert(dominators_->get_dom_tree_succ_blocks(succ).begin(), dominators_->get_dom_tree_succ_blocks(succ).end());
+                for (auto inst = succ->get_instructions().begin(); inst != succ->get_instructions().end(); inst++) {
+                    for (int i = 0; i < inst->get_num_operand(); i++) {
+                        auto op = inst->get_operand(i);
+                        if (op == lval) {
+                            inst->set_operand(i, replace_val);
+                        }
+                    }
+                }
+            }
         }
         else if (inst.is_store()) {
             auto store = static_cast<StoreInst*>(&inst);
             auto lval = store->get_lval();
             auto rval = store->get_rval();
             rename_stack_[lval].push(rval);
+            if (is_valid_ptr(lval)) {
+                is_dead_[lval] = true;  // 定义被使用，标记为冗余
+            }
+            else {
+                is_dead_[lval] = false; // 可能是内存操作，标记为非冗余
+            }
         }
         else if (inst.is_gep()) {
             auto gep = static_cast<GetElementPtrInst*>(&inst);
@@ -172,7 +221,9 @@ void Mem2Reg::rename(BasicBlock* bb) {
                         if (flag) {
                             auto replace_val = it->first;
                             auto inst_after = std::next(gep->getIterator());
+                            is_dead_[replace_val] = false;  // 定义被使用，标记为非冗余
                             // 替换 gep 指令后面的所有指令中的操作数
+                            // 本基本块
                             while (inst_after != bb->get_instructions().end()) {
                                 auto inst = &(*inst_after);
                                 for (int i = 0; i < inst->get_num_operand(); i++) {
@@ -183,6 +234,22 @@ void Mem2Reg::rename(BasicBlock* bb) {
                                 }
                                 inst_after++;
                             }
+                            // 后续基本块
+                            BBSet succs = dominators_->get_dom_tree_succ_blocks(bb);
+                            while (!succs.empty()) {
+                                auto succ = *succs.begin();
+                                succs.erase(succ);
+                                succs.insert(dominators_->get_dom_tree_succ_blocks(succ).begin(), dominators_->get_dom_tree_succ_blocks(succ).end());
+                                for (auto inst = succ->get_instructions().begin(); inst != succ->get_instructions().end(); inst++) {
+                                    for (int i = 0; i < inst->get_num_operand(); i++) {
+                                        auto op = inst->get_operand(i);
+                                        if (op == lval) {
+                                            inst->set_operand(i, replace_val);
+                                        }
+                                    }
+                                }
+                            }
+                            break;
                         }
                     }
                 }
@@ -193,14 +260,15 @@ void Mem2Reg::rename(BasicBlock* bb) {
         }
     }
     // 填充 phi 指令的参数
-    for (auto& bb_succ : dominators_->get_dom_tree_succ_blocks(bb)) {
-        if (bb_succ == bb)
-            continue;
+    // 使用基本块后继，而不是支配树后继
+    for (auto& bb_succ : bb->get_succ_basic_blocks()) {
         for (auto& inst : bb_succ->get_instructions()) {
             if (inst.is_phi()) {
                 auto phi = static_cast<PhiInst*>(&inst);
                 auto rval = phi_values_[phi];
-                phi->add_phi_pair_operand(rename_stack_[rval].top(), bb);
+                if (!rename_stack_[rval].empty()) {
+                    phi->add_phi_pair_operand(rename_stack_[rval].top(), bb);
+                }
             }
         }
     }
@@ -208,8 +276,7 @@ void Mem2Reg::rename(BasicBlock* bb) {
 
     // 递归遍历基本块
     for (auto& bb_succ : dominators_->get_dom_tree_succ_blocks(bb)) {
-        if (bb_succ != bb)
-            rename(bb_succ);
+        rename(bb_succ);
     }
 
     // 恢复栈空间
@@ -225,6 +292,7 @@ void Mem2Reg::rename(BasicBlock* bb) {
             rename_stack_[lval].pop();
         }
     }
+    // 清除冗余指令
     bool flag = true;
     while (flag) {
         flag = false;
@@ -232,7 +300,7 @@ void Mem2Reg::rename(BasicBlock* bb) {
             if (inst.is_store()) {
                 auto store = static_cast<StoreInst*>(&inst);
                 auto lval = store->get_lval();
-                if (rename_stack_[lval].empty()) {
+                if (is_dead_[lval]) {
                     flag = true;
                     inst.remove_all_operands();
                     inst.get_parent()->get_instructions().erase(inst);
@@ -240,8 +308,5 @@ void Mem2Reg::rename(BasicBlock* bb) {
                 }
             }
         }
-    }
-    for (auto& inst : bb->get_instructions()) {
-        std::cout << inst.print() << std::endl;
     }
 }
